@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YGGDRASIL</title>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+<style>
+body{
+  background:linear-gradient(135deg,#1a2a6c,#b21f1f,#fdbb2d);
+  background-size:400% 400%;
+  animation:gradientBG 15s ease infinite;
+  color:#e2e8f0;
+  font-family:Arial;
+  margin:0;
+  padding:1rem;
+}
+@keyframes gradientBG{
+  0%{background-position:0% 50%;}
+  50%{background-position:100% 50%;}
+  100%{background-position:0% 50%;}
+}
+#timer{
+  font-size:18px;
+  text-align:center;
+  margin-bottom:10px;
+  font-weight:bold;
+}
+.consumo {
+  color: red;
+  font-size: 0.8rem;
+  margin-left: 2px;
+  width:18px;
+  height:18px;
+  vertical-align: middle;
+}
+.unit-icon {
+  width:18px;
+  height:18px;
+  vertical-align:middle;
+}
+.country,.city{
+  background:rgba(0,0,0,0.8);
+  border-radius:12px;
+  box-shadow:0 0 5px rgba(255,255,255,0.3);
+  padding:1rem;
+  margin:1rem 0.2rem;
+}
+.country-name{
+  text-align:center;
+  font-weight:bold;
+  text-transform:uppercase;
+  margin-bottom:0.5rem;
+}
+.city-name{
+  text-align:center;
+  font-weight:bold;
+  text-transform:uppercase;
+}
+.country-resources{
+  text-align:center;
+  margin-bottom:8px;
+  display:flex;
+  justify-content:center;
+  gap:6px;
+  flex-wrap:wrap;
+}
+.country-units{
+  text-align:center;
+  margin-bottom:8px;
+  display:flex;
+  justify-content:center;
+  gap:6px;
+  flex-wrap:wrap;
+}
+.cities-row{
+  display:flex;
+  gap:12px;
+  overflow-x:auto;
+  padding-bottom:10px;
+}
+.cities-row::-webkit-scrollbar{display:none;}
+.city{min-width:220px;flex-shrink:0;}
+.city-info{color:#a0a0a0;line-height:1.6;}
+.header{font-size:26px;margin-bottom:10px;text-transform:uppercase;}
+.positive{color:limegreen;}
+.negative{color:red;}
+.unit-icon{width:23px;height:23px;vertical-align:middle;}
+.top-pib-table{
+  width:100%;
+  border-collapse:separate;
+  border-spacing:0;
+  margin-bottom:1rem;
+  border-radius:12px;
+  overflow:hidden;
+  box-shadow:0 0 5px rgba(255,255,255,0.5),0 0 7px rgba(255,255,255,0.2);
+  background:rgba(0,0,0,0.6);
+}
+.top-pib-table th,
+.top-pib-table td{
+  padding:0.6rem;
+  text-align:center;
+  background:rgba(0,0,0,0.5);
+  color:#e2e8f0;
+  border-bottom:1px solid #555;
+}
+.top-pib-table th{
+  background:rgba(0,0,0,0.7);
+  font-weight:bold;
+}
+.top-pib-table tr:last-child td{border-bottom:none;}
+</style>
+</head>
+
+<body>
+
+<div id="timer">Cargando...</div>
+
+<table class="top-pib-table" id="top-pib">
+<thead>
+<tr>
+<th></th>
+<th><img class="unit-icon" src="icon/food.png"></th>
+<th><img class="unit-icon" src="icon/wood.png"></th>
+<th><img class="unit-icon" src="icon/metal.png"></th>
+</tr>
+</thead>
+<tbody></tbody>
+</table>
+
+<div id="countries"></div>
+
+<script>
+const firebaseConfig={
+  apiKey:"AIzaSyA8f5ZgzTS-b7RhQ6_WMmjWt78tCxkO2vE",
+  authDomain:"yggdrasil-3b611.firebaseapp.com",
+  projectId:"yggdrasil-3b611",
+  storageBucket:"yggdrasil-3b611.firebasestorage.app",
+  messagingSenderId:"365372065454",
+  appId:"1:365372065454:web:7b2186790407141f534f3f"
+};
+firebase.initializeApp(firebaseConfig);
+const db=firebase.firestore();
+
+function colorClass(value){return value>=0?"positive":"negative";}
+function formatNumber(value){return Number(value).toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function formatPercent(value){return value>0?`<span class="positive">${value}%</span>`:`<span style="color:#e2e8f0">${value}%</span>`;}
+function signed(value){return value>=0?`+${formatNumber(value)}`:`${formatNumber(value)}`;}
+
+// ============================
+// CARGAR PIB GLOBAL
+// ============================
+async function cargarPIBGlobal(){
+  const pibTable=document.getElementById("top-pib").querySelector("tbody");
+  pibTable.innerHTML="";
+  const pibSnapshot=await db.collection("pib").get();
+  pibSnapshot.forEach(doc=>{
+    const id=doc.id;
+    const data=doc.data();
+    let label="";
+    const piezas=["peon","alfil","caballo","torre","reina"];
+    if(piezas.includes(id)){
+      label=`<img class="unit-icon" src="icon/${id}.png">`;
+    }else{
+      label=id.toUpperCase();
+    }
+    const row=document.createElement("tr");
+    row.innerHTML=`
+      <td>${label}</td>
+      <td>${formatNumber(data.food ?? 0)}</td>
+      <td>${formatNumber(data.wood ?? 0)}</td>
+      <td>${formatNumber(data.metal ?? 0)}</td>
+    `;
+    pibTable.appendChild(row);
+  });
+}
+
+// ============================
+// TEMPORIZADOR
+// ============================
+async function iniciarTimer(){
+  const res=await fetch("/timer");
+  const data=await res.json();
+  const lastUpdate=data.lastUpdate;
+  const interval=data.interval;
+  const serverTime=data.serverTime;
+  const clientTime=Date.now();
+  const offset=serverTime-clientTime;
+  const timerDiv=document.getElementById("timer");
+  const timerInterval=setInterval(()=>{
+    const ahora=Date.now()+offset;
+    let restante=interval-(ahora-lastUpdate);
+    if(restante<0)restante=0;
+    const minutes=Math.floor(restante/60000).toString().padStart(2,'0');
+    const seconds=Math.floor((restante%60000)/1000).toString().padStart(2,'0');
+    timerDiv.textContent=`${minutes}:${seconds}`;
+    if(restante===0){
+      clearInterval(timerInterval);
+      location.reload();
+    }
+  },1000);
+}
+
+// ============================
+// FUNCIONES AUXILIARES NIVEL
+// ============================
+function generarBarra(level){
+  const filled='■'.repeat(level);
+  const empty='□'.repeat(5-level);
+  return filled+empty;
+}
+
+// ============================
+// CARGAR PAÍSES Y CIUDADES
+// ============================
+async function loadCountriesData() {
+  const container = document.getElementById("countries");
+  container.innerHTML = "";
+
+  const pibSnapshot = await db.collection("pib").get();
+  const PIB_UNIDADES = {};
+  pibSnapshot.forEach(doc => { PIB_UNIDADES[doc.id] = doc.data(); });
+
+  const countriesSnapshot = await db.collection("countries").get();
+
+  for (const countryDoc of countriesSnapshot.docs) {
+    const countryId = countryDoc.id;
+    const countryName = countryId.toUpperCase();
+
+    const pibDoc = await db.collection("pib").doc(countryId).get();
+    const countryPIB = pibDoc.exists ? pibDoc.data() : { food:0, wood:0, metal:0 };
+
+    const citiesSnapshot = await db.collection("countries").doc(countryId).collection("cities").get();
+
+    let totalFood=0, totalWood=0, totalMineral=0;
+    let totalPeon=0, totalAlfil=0, totalCaballo=0, totalTorre=0, totalReina=0;
+
+    let citiesHTML="";
+
+    citiesSnapshot.forEach(cityDoc=>{
+      const city=cityDoc.data();
+      const cityName=cityDoc.id.toUpperCase();
+      const level = city.level || 1;
+      const barraNivel = '■'.repeat(level)+'□'.repeat(5-level);
+
+      // generación base
+      const genFood = countryPIB.food * city.pct_food / 100;
+      const genWood = countryPIB.wood * city.pct_wood / 100;
+      const genMetal = countryPIB.metal * city.pct_metal / 100;
+
+      // consumo
+      function consumo(unidad){
+        return {
+          food: ((PIB_UNIDADES[unidad]?.food||0)*(city[unidad]||0)/168),
+          wood: ((PIB_UNIDADES[unidad]?.wood||0)*(city[unidad]||0)/168),
+          metal: ((PIB_UNIDADES[unidad]?.metal||0)*(city[unidad]||0)/168)
+        };
+      }
+
+      const peonConsumo = consumo("peon");
+      const alfilConsumo = consumo("alfil");
+      const caballoConsumo = consumo("caballo");
+      const torreConsumo = consumo("torre");
+      const reinaConsumo = consumo("reina");
+
+      const totalConsumo = {
+        food: peonConsumo.food + alfilConsumo.food + caballoConsumo.food + torreConsumo.food + reinaConsumo.food,
+        wood: peonConsumo.wood + alfilConsumo.wood + caballoConsumo.wood + torreConsumo.wood + reinaConsumo.wood,
+        metal: peonConsumo.metal + alfilConsumo.metal + caballoConsumo.metal + torreConsumo.metal + reinaConsumo.metal
+      };
+
+      // neto por hora incluyendo alianzas
+      const netFood = genFood - totalConsumo.food + (city.ali_food||0);
+      const netWood = genWood - totalConsumo.wood + (city.ali_wood||0);
+      const netMetal = genMetal - totalConsumo.metal + (city.ali_metal||0);
+
+      totalFood += city.food;
+      totalWood += city.wood;
+      totalMineral += city.metal;
+      totalPeon += city.peon||0;
+      totalAlfil += city.alfil||0;
+      totalCaballo += city.caballo||0;
+      totalTorre += city.torre||0;
+      totalReina += city.reina||0;
+
+      citiesHTML+=`
+<div class="city">
+  <div class="city-name">${cityName}</div>
+  <div style="text-align:center; margin-bottom:2px;">${barraNivel}</div>
+
+  <div class="city-info">
+    <img class="unit-icon" src="icon/food.png"> ${formatNumber(city.food)} (${formatPercent(city.pct_food)} <span class="${colorClass(netFood)}">${signed(netFood.toFixed(2))}</span>)<br>
+    <img class="unit-icon" src="icon/wood.png"> ${formatNumber(city.wood)} (${formatPercent(city.pct_wood)} <span class="${colorClass(netWood)}">${signed(netWood.toFixed(2))}</span>)<br>
+    <img class="unit-icon" src="icon/metal.png"> ${formatNumber(city.metal)} (${formatPercent(city.pct_metal)} <span class="${colorClass(netMetal)}">${signed(netMetal.toFixed(2))}</span>)<br><br>
+
+    <img class="unit-icon" src="icon/peon.png"> ${city.peon||0} 
+      <span class="consumo">
+        <img class="unit-icon" src="icon/food.png">${peonConsumo.food.toFixed(2)}
+        <img class="unit-icon" src="icon/wood.png">${peonConsumo.wood.toFixed(2)}
+        <img class="unit-icon" src="icon/metal.png">${peonConsumo.metal.toFixed(2)}
+      </span><br>
+
+    <img class="unit-icon" src="icon/alfil.png"> ${city.alfil||0} 
+      <span class="consumo">
+        <img class="unit-icon" src="icon/food.png">${alfilConsumo.food.toFixed(2)}
+        <img class="unit-icon" src="icon/wood.png">${alfilConsumo.wood.toFixed(2)}
+        <img class="unit-icon" src="icon/metal.png">${alfilConsumo.metal.toFixed(2)}
+      </span><br>
+
+    <img class="unit-icon" src="icon/caballo.png"> ${city.caballo||0} 
+      <span class="consumo">
+        <img class="unit-icon" src="icon/food.png">${caballoConsumo.food.toFixed(2)}
+        <img class="unit-icon" src="icon/wood.png">${caballoConsumo.wood.toFixed(2)}
+        <img class="unit-icon" src="icon/metal.png">${caballoConsumo.metal.toFixed(2)}
+      </span><br>
+
+    <img class="unit-icon" src="icon/torre.png"> ${city.torre||0} 
+      <span class="consumo">
+        <img class="unit-icon" src="icon/food.png">${torreConsumo.food.toFixed(2)}
+        <img class="unit-icon" src="icon/wood.png">${torreConsumo.wood.toFixed(2)}
+        <img class="unit-icon" src="icon/metal.png">${torreConsumo.metal.toFixed(2)}
+      </span><br>
+
+    <img class="unit-icon" src="icon/reina.png"> ${city.reina||0} 
+      <span class="consumo">
+        <img class="unit-icon" src="icon/food.png">${reinaConsumo.food.toFixed(2)}
+        <img class="unit-icon" src="icon/wood.png">${reinaConsumo.wood.toFixed(2)}
+        <img class="unit-icon" src="icon/metal.png">${reinaConsumo.metal.toFixed(2)}
+      </span><br>
+
+    <div style="text-align:center; font-size:1.2rem; margin-top:4px;">🤝 
+      <img class="unit-icon" src="icon/food.png">${city.ali_food||0} 
+      <img class="unit-icon" src="icon/wood.png">${city.ali_wood||0} 
+      <img class="unit-icon" src="icon/metal.png">${city.ali_metal||0}
+    </div>
+  </div>
+</div>
+`;
+    });
+
+    const countryDiv=document.createElement("div");
+    countryDiv.className="country";
+    countryDiv.innerHTML=`
+      <div class="country-name">${countryName}</div>
+      <div class="country-resources">
+        <img class="unit-icon" src="icon/food.png">${formatNumber(totalFood)}
+        <img class="unit-icon" src="icon/wood.png">${formatNumber(totalWood)}
+        <img class="unit-icon" src="icon/metal.png">${formatNumber(totalMineral)}
+      </div>
+      <div class="country-units">
+        <img class="unit-icon" src="icon/peon.png">${totalPeon}
+        <img class="unit-icon" src="icon/alfil.png">${totalAlfil}
+        <img class="unit-icon" src="icon/caballo.png">${totalCaballo}
+        <img class="unit-icon" src="icon/torre.png">${totalTorre}
+        <img class="unit-icon" src="icon/reina.png">${totalReina}
+      </div>
+      <div class="cities-row">${citiesHTML}</div>
+    `;
+    container.appendChild(countryDiv);
+  }
+}
+
+// ============================
+// INICIO
+// ============================
+cargarPIBGlobal();
+loadCountriesData();
+iniciarTimer();
+</script>
+</body>
+</html>
