@@ -1,0 +1,272 @@
+import express from "express";
+import path from "path";
+import { fileURLToPath } from "url";
+import admin from "firebase-admin";
+import fs from "fs";
+import fetch from "node-fetch";
+
+const serviceAccount = JSON.parse(
+  fs.readFileSync("./serviceAccountKey.json")
+);
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
+
+const db = admin.firestore();
+
+// intervalo global (1 hora)
+const UPDATE_INTERVAL = 60 * 60 * 1000;
+
+// ping para mantener vivo el servidor
+const KEEPALIVE_INTERVAL = 5 * 60 * 1000;
+const KEEPALIVE_URL = "https://yggdrasilwar.koyeb.app";
+
+let lastUpdate = Date.now();
+
+// =========================
+// WEBHOOKS POR PAÍS
+// =========================
+const COUNTRY_WEBHOOKS = {
+  "Elyndor": "https://discord.com/api/webhooks/1480326073135665342/p_K5Zs8ekfmds1cn4a_dIW-YJoqNS4WpSCNvMRNPFb0zccjynC8MZXuesWyhabFifmaV",
+  "Grizzak": "https://discord.com/api/webhooks/1480312609201717250/sghkYW13I0ktZfkx8OZZELShVMNYLxSBhgcP0PQgL_T4gOUIb1YLytSSuZwmlzicEoEv",
+  "Ignivar": "https://discord.com/api/webhooks/1480312702449488032/De_PRDX6OpsQzNb45gEJu9rd5zkraFiklDRH7ktluN00lul4nfuayVCJMo4HNobxOzK8",
+  "Thalrûn": "https://discord.com/api/webhooks/1480312765745860618/mKp_aBHS_UGCGe3_uZZ7i7n1VXFDTc2D2_Azskak8skUV5k4Brvtg7fXD0GFh2LhAt2q",
+  "Valerion": "https://discord.com/api/webhooks/1480326224558559313/IR_K2BX1N1MrWPR14_Za23MHhJecuLqcm1kHDRAw4xcK58xVp4uaEXuM4WKVy42FOSoG"
+};
+
+// =========================
+// FUNCIONES
+// =========================
+function round3(n){
+  return parseFloat(n.toFixed(3));
+}
+
+function construirEmbed(countryName, citiesData, countryResources, countryUnits){
+
+  const description =
+  `**> <:food:1480307270368886966> ${countryResources.food}
+  > <:wood:1480307295899484301> ${countryResources.wood}
+  > <:metal:1480307315897929891> ${countryResources.metal}
+
+  > <:peon:1480307385200410737> ${countryUnits.peon}
+  > <:alfil:1480307343743782992> ${countryUnits.alfil}
+  > <:caballo:1480307363821912164> ${countryUnits.caballo}
+  > <:torre:1480307450749124759> ${countryUnits.torre}
+  > <:reina:1480307407375564911> ${countryUnits.reina} **`;
+
+  const fields = citiesData.map(city => ({
+    name: city.name,
+    value:
+    `**<:food:1480307270368886966> ${city.food}
+    <:wood:1480307295899484301> ${city.wood}
+    <:metal:1480307315897929891> ${city.metal}
+
+    <:peon:1480307385200410737> ${city.peon}
+    <:alfil:1480307343743782992> ${city.alfil}
+    <:caballo:1480307363821912164> ${city.caballo}
+    <:torre:1480307450749124759> ${city.torre}
+    <:reina:1480307407375564911> ${city.reina}
+
+    🤝 <:food:1480307270368886966> ${city.ali_food || 0}
+    <:wood:1480307295899484301> ${city.ali_wood || 0}
+    <:metal:1480307315897929891> ${city.ali_metal || 0} **`,
+    inline:false
+  }));
+
+  return {
+    content:"",
+    embeds:[{
+      description,
+      color:16726289,
+      fields
+    }]
+  };
+}
+
+async function enviarWebhook(webhookURL,payload){
+  try{
+    await fetch(webhookURL,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(payload)
+    });
+  }catch(err){
+    console.error("Webhook error:",err);
+  }
+}
+
+// =========================
+// KEEP SERVER ALIVE
+// =========================
+async function keepServerAlive(){
+  try{
+    const res = await fetch(KEEPALIVE_URL);
+    console.log("KeepAlive ping:", res.status, new Date().toISOString());
+  }catch(err){
+    console.error("KeepAlive error:", err);
+  }
+}
+
+// =========================
+// ACTUALIZAR RECURSOS
+// =========================
+async function updateResources(){
+
+  console.log("Actualizando recursos...",new Date());
+
+  // PIB unidades
+  const pibPeon = (await db.collection("pib").doc("peon").get()).data();
+  const pibAlfil = (await db.collection("pib").doc("alfil").get()).data();
+  const pibCaballo = (await db.collection("pib").doc("caballo").get()).data();
+  const pibTorre = (await db.collection("pib").doc("torre").get()).data();
+  const pibReina = (await db.collection("pib").doc("reina").get()).data();
+
+  const countriesSnapshot = await db.collection("countries").get();
+
+  for(const countryDoc of countriesSnapshot.docs){
+
+    const countryId = countryDoc.id;
+
+    const pibDoc = await db.collection("pib").doc(countryId).get();
+    const countryPIB = pibDoc.exists ? pibDoc.data() : {food:0,wood:0,metal:0};
+
+    const citiesSnapshot = await db.collection("countries")
+      .doc(countryId)
+      .collection("cities")
+      .get();
+
+    let totalResources = {food:0,wood:0,metal:0};
+    let totalUnits = {peon:0,alfil:0,caballo:0,torre:0,reina:0};
+
+    const citiesData=[];
+
+    for(const cityDoc of citiesSnapshot.docs){
+
+      const city = cityDoc.data();
+      const cityName = city.name || cityDoc.id;
+
+      const peon = city.peon || 0;
+      const alfil = city.alfil || 0;
+      const caballo = city.caballo || 0;
+      const torre = city.torre || 0;
+      const reina = city.reina || 0;
+
+      const consumoFood =
+      (peon * pibPeon.food +
+       alfil * pibAlfil.food +
+       caballo * pibCaballo.food +
+       torre * pibTorre.food +
+       reina * pibReina.food) / 168;
+
+      const consumoWood =
+      (peon * pibPeon.wood +
+       alfil * pibAlfil.wood +
+       caballo * pibCaballo.wood +
+       torre * pibTorre.wood +
+       reina * pibReina.wood) / 168;
+
+      const consumoMetal =
+      (peon * pibPeon.metal +
+       alfil * pibAlfil.metal +
+       caballo * pibCaballo.metal +
+       torre * pibTorre.metal +
+       reina * pibReina.metal) / 168;
+
+      // valor neto incluyendo alianzas
+      const food = round3(
+        (city.food || 0) +
+        (countryPIB.food * (city.pct_food || 0) / 100) -
+        consumoFood +
+        (city.ali_food || 0)
+      );
+
+      const wood = round3(
+        (city.wood || 0) +
+        (countryPIB.wood * (city.pct_wood || 0) / 100) -
+        consumoWood +
+        (city.ali_wood || 0)
+      );
+
+      const metal = round3(
+        (city.metal || 0) +
+        (countryPIB.metal * (city.pct_metal || 0) / 100) -
+        consumoMetal +
+        (city.ali_metal || 0)
+      );
+
+      await cityDoc.ref.update({food,wood,metal});
+
+      totalResources.food += food;
+      totalResources.wood += wood;
+      totalResources.metal += metal;
+
+      totalUnits.peon += peon;
+      totalUnits.alfil += alfil;
+      totalUnits.caballo += caballo;
+      totalUnits.torre += torre;
+      totalUnits.reina += reina;
+
+      citiesData.push({
+        name: cityName,
+        food, wood, metal,
+        peon, alfil, caballo, torre, reina,
+        ali_food: city.ali_food || 0,
+        ali_wood: city.ali_wood || 0,
+        ali_metal: city.ali_metal || 0
+      });
+    }
+
+    await db.collection("countries").doc(countryId).update({
+      food: round3(totalResources.food),
+      wood: round3(totalResources.wood),
+      metal: round3(totalResources.metal),
+      peon: totalUnits.peon,
+      alfil: totalUnits.alfil,
+      caballo: totalUnits.caballo,
+      torre: totalUnits.torre,
+      reina: totalUnits.reina,
+      lastUpdate: Date.now()
+    });
+
+    const payload = construirEmbed(countryId,citiesData,totalResources,totalUnits);
+    const webhook = COUNTRY_WEBHOOKS[countryId];
+
+    if(webhook) await enviarWebhook(webhook,payload);
+  }
+
+  lastUpdate = Date.now();
+  console.log("Actualización terminada");
+}
+
+setInterval(updateResources, UPDATE_INTERVAL);
+setInterval(keepServerAlive, KEEPALIVE_INTERVAL);
+
+// =========================
+// SERVIDOR WEB
+// =========================
+const app = express();
+const PORT = process.env.PORT || 3000;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+app.use(express.static(__dirname));
+
+app.get("/timer",(req,res)=>{
+  res.json({
+    lastUpdate,
+    interval: UPDATE_INTERVAL,
+    serverTime: Date.now()
+  });
+});
+
+app.get("/global-pib", async (req,res)=>{
+  const doc = await db.collection("pib").doc("global").get();
+  res.json(doc.exists ? doc.data() : {peon:0,alfil:0,caballo:0,torre:0,reina:0});
+});
+
+app.get("/",(req,res)=>{
+  res.sendFile(path.join(__dirname,"index.html"));
+});
+
+app.listen(PORT,()=>{ console.log("Servidor activo puerto",PORT); });
